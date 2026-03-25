@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model SubmissionRun {
+  id                String    @id @default(cuid())
+  formUrl           String
+  formId            String
+  formSchema        Json
+  personas          Json
+  totalResponses    Int
+  windowMinutes     Int
+  status            String    @default("pending") // pending | running | completed | failed
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+  googleAccessToken String?
+
+  responseJobs ResponseJob[]
+
+  @@index([status])
+}
+
+model ResponseJob {
+  id           String    @id @default(cuid())
+  runId        String
+  personaIndex Int
+  answers      Json
+  scheduledFor DateTime
+  status       String    @default("pending") // pending | submitted | failed
+  submittedAt  DateTime?
+  errorMessage String?
+
+  run SubmissionRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, status])
+}
