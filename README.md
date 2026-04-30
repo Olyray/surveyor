@@ -65,11 +65,13 @@ npx prisma migrate dev --name init
 You need two terminals:
 
 **Terminal 1 — Next.js app:**
+
 ```bash
 npm run dev
 ```
 
 **Terminal 2 — Inngest dev server** (processes the background submission jobs):
+
 ```bash
 npx inngest-cli@latest dev
 ```
@@ -90,21 +92,22 @@ Open [http://localhost:3000](http://localhost:3000) and the Inngest UI at [http:
 ### Dashboard
 
 The dashboard polls automatically and shows:
+
 - Overall progress (submitted / pending / failed)
 - Per-job status with scheduled and actual submission times
 
 ### Supported field types
 
-| Type | How it's answered |
-|------|-------------------|
-| Multiple choice | Weighted random based on persona sentiment |
-| Dropdown | Weighted random based on persona sentiment |
-| Checkbox | Random subset, weighted toward sentiment |
-| Linear scale (Likert) | Sentiment-weighted numeric value |
-| Short text | Gemini — brief, few-word answer |
-| Long text | Gemini — natural sentences, length based on persona verbosity |
-| Date | Random date within the past year |
-| Time | Random time |
+| Type                  | How it's answered                                             |
+| --------------------- | ------------------------------------------------------------- |
+| Multiple choice       | Weighted random based on persona sentiment                    |
+| Dropdown              | Weighted random based on persona sentiment                    |
+| Checkbox              | Random subset, weighted toward sentiment                      |
+| Linear scale (Likert) | Sentiment-weighted numeric value                              |
+| Short text            | Gemini — brief, few-word answer                               |
+| Long text             | Gemini — natural sentences, length based on persona verbosity |
+| Date                  | Random date within the past year                              |
+| Time                  | Random time                                                   |
 
 ## Production Deployment
 
