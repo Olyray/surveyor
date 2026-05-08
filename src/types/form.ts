@@ -6,7 +6,8 @@ export type FieldType =
   | "dropdown"
   | "linear_scale"
   | "date"
-  | "time";
+  | "time"
+  | "grid";
 
 export type Field = {
   entryId: string;
@@ -14,6 +15,7 @@ export type Field = {
   type: FieldType;
   required: boolean;
   options: string[];
+  hasOther?: boolean;
   scaleMin?: number;
   scaleMax?: number;
   conditionalRules?: unknown;
@@ -38,7 +40,7 @@ export const FIELD_TYPE_MAP: Record<number, FieldType> = {
   3: "dropdown",
   4: "checkbox",
   5: "linear_scale",
-  7: "linear_scale", // grid/scale variant
+  // type 7 (multiple choice grid) is handled specially in parseField
   9: "date",
   10: "time",
 };

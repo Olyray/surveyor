@@ -110,9 +110,11 @@ function parseFormHtml(html: string, formId: string): FormSchema {
   const fields: Field[] = [];
 
   for (const rawField of rawFields) {
-    const field = parseField(rawField);
-    if (field) {
-      fields.push(field);
+    const parsed = parseField(rawField);
+    if (Array.isArray(parsed)) {
+      fields.push(...parsed);
+    } else if (parsed) {
+      fields.push(parsed);
     }
   }
 
@@ -130,10 +132,18 @@ function parseFormHtml(html: string, formId: string): FormSchema {
 
 /**
  * Parse a single field from the raw FB_PUBLIC_LOAD_DATA_ array structure.
+ * Returns Field[] for grid questions (one Field per row), Field for regular questions, null to skip.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseField(raw: any[]): Field | null {
+function parseField(raw: any[]): Field | Field[] | null {
   if (!Array.isArray(raw)) return null;
+
+  const typeCode: number = raw[3];
+
+  // Multiple choice grid (type 7): each row is a separate sub-field with its own entryId
+  if (typeCode === 7) {
+    return parseGridField(raw);
+  }
 
   const label: string = raw[1] ?? "";
   const fieldData = raw[4];
@@ -144,20 +154,29 @@ function parseField(raw: any[]): Field | null {
   if (!Array.isArray(fieldInfo)) return null;
 
   const entryId = `entry.${fieldInfo[0]}`;
-  const typeCode: number = raw[3];  // type is on the outer field array, not the inner sub-field
   const type: FieldType = FIELD_TYPE_MAP[typeCode] ?? "short_text";
   const required: boolean = fieldInfo[2] === 1;
 
   // Extract options for choice-based fields
   const options: string[] = [];
+  let hasOther = false;
   if (
     Array.isArray(fieldInfo[1]) &&
     ["multiple_choice", "checkbox", "dropdown"].includes(type)
   ) {
     for (const opt of fieldInfo[1]) {
       if (Array.isArray(opt) && typeof opt[0] === "string") {
-        options.push(opt[0]);
+        if (opt[0] === "") {
+          // Empty string in options array is how Google Forms encodes the "Other" option
+          hasOther = true;
+        } else {
+          options.push(opt[0]);
+        }
       }
+    }
+    // fieldInfo[5] === 1 is an alternative indicator that "Other" is enabled
+    if (fieldInfo[5] === 1) {
+      hasOther = true;
     }
   }
 
@@ -181,8 +200,59 @@ function parseField(raw: any[]): Field | null {
     type,
     required,
     options,
+    hasOther: hasOther || undefined,
     scaleMin,
     scaleMax,
     conditionalRules: conditionalRules || undefined,
   };
+}
+
+/**
+ * Parse a multiple choice grid field (type code 7).
+ * Each row in the grid becomes its own Field with a unique entryId and
+ * the shared column options as its choices.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseGridField(raw: any[]): Field[] {
+  const gridTitle: string = raw[1] ?? "";
+  const fieldData = raw[4];
+  if (!Array.isArray(fieldData)) return [];
+
+  const fields: Field[] = [];
+
+  for (let i = 0; i < fieldData.length; i++) {
+    const subField = fieldData[i];
+    if (!Array.isArray(subField)) continue;
+
+    const entryId = `entry.${subField[0]}`;
+    const required: boolean = subField[2] === 1;
+
+    // Row label is stored at subField[3] — may be a string or [string, ...]
+    let rowLabel = `Row ${i + 1}`;
+    if (typeof subField[3] === "string" && subField[3]) {
+      rowLabel = subField[3];
+    } else if (Array.isArray(subField[3]) && typeof subField[3][0] === "string") {
+      rowLabel = subField[3][0];
+    }
+
+    // Column options shared across all rows
+    const options: string[] = [];
+    if (Array.isArray(subField[1])) {
+      for (const opt of subField[1]) {
+        if (Array.isArray(opt) && typeof opt[0] === "string") {
+          options.push(opt[0]);
+        }
+      }
+    }
+
+    fields.push({
+      entryId,
+      label: gridTitle ? `${gridTitle} — ${rowLabel}` : rowLabel,
+      type: "grid",
+      required,
+      options,
+    });
+  }
+
+  return fields;
 }

@@ -28,11 +28,17 @@ export async function generateResponseForPersona(
     (f) => f.type === "short_text" || f.type === "long_text"
   );
 
-  if (textFields.length > 0) {
+  // Fields where "Other" was selected — need the LLM to write the free text
+  const otherSelectedFields = schema.fields.filter(
+    (f) => answers[f.entryId] === "__other_option__"
+  );
+
+  if (textFields.length > 0 || otherSelectedFields.length > 0) {
     const textAnswers = await generateFreeTextAnswers(
       schema,
       textFields,
-      persona
+      persona,
+      otherSelectedFields
     );
     Object.assign(answers, textAnswers);
   }
@@ -50,7 +56,8 @@ function generateStructuredAnswer(
   switch (field.type) {
     case "multiple_choice":
     case "dropdown":
-      return pickWeightedOption(field.options, persona);
+    case "grid":
+      return pickWeightedOption(field.options, persona, field.hasOther);
 
     case "checkbox":
       return pickMultipleOptions(field.options, persona);
@@ -72,12 +79,14 @@ function generateStructuredAnswer(
 
 /**
  * Pick a single option from a list, weighted by persona sentiment.
+ * If hasOther is true, "__other_option__" is added as a possible pick.
  */
-function pickWeightedOption(options: string[], persona: Persona): string {
-  if (options.length === 0) return "";
+function pickWeightedOption(options: string[], persona: Persona, hasOther = false): string {
+  const pool = hasOther ? [...options, "__other_option__"] : options;
+  if (pool.length === 0) return "";
 
-  const weights = buildWeights(options.length, persona.sentiment);
-  return weightedRandom(options, weights);
+  const weights = buildWeights(pool.length, persona.sentiment);
+  return weightedRandom(pool, weights);
 }
 
 /**
@@ -189,11 +198,13 @@ function generateRandomTime(): string {
 
 /**
  * Generate free-text answers for all text fields in a single batched LLM call.
+ * Also generates the free-text value for any "Other" option selections.
  */
 async function generateFreeTextAnswers(
   schema: FormSchema,
   textFields: Field[],
-  persona: Persona
+  persona: Persona,
+  otherSelectedFields: Field[] = []
 ): Promise<AnswerMap> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
@@ -217,16 +228,28 @@ async function generateFreeTextAnswers(
     })
     .join("\n");
 
+  const otherOffset = textFields.length;
+  const otherList = otherSelectedFields
+    .map((f, i) => {
+      const existingOpts = f.options.length > 0 ? ` The existing options were: ${f.options.map(o => `"${o}"`).join(", ")} — do NOT write any of these; your answer must be genuinely different.` : "";
+      return `${otherOffset + i + 1}. You chose "Other" for the question "${f.label}" — write a short free-text value that fits your persona [SHORT ANSWER: a few words or a brief phrase].${existingOpts}`;
+    })
+    .join("\n");
+
+  const allQuestions = [questionList, otherList].filter(Boolean).join("\n");
+
   const prompt = `You are ${persona.name}, age ${persona.age}, ${persona.occupation}. ${persona.background}
 Your survey response style: ${persona.answerTendencies}. You tend to be ${persona.sentiment} in your outlook.
 ${verbosityGuide[persona.verbosity]}
+
+You are Nigerian. All your answers must reflect the Nigerian context — use Nigerian spellings, references, places, institutions, and cultural norms. Do not reference things that don't exist or are uncommon in Nigeria (e.g. no Associate Degrees, no US/UK-specific institutions or brands unless they also operate in Nigeria).
 
 This is a survey titled "${schema.title}".
 
 Answer each survey question EXACTLY as instructed per question. Short-answer questions must be answered in a few words — never a full sentence. Open-ended questions can be answered naturally.
 
 Questions:
-${questionList}
+${allQuestions}
 
 Return a JSON object where keys are the question numbers (as strings: "1", "2", etc.) and values are your answers.`;
 
@@ -241,6 +264,14 @@ Return a JSON object where keys are the question numbers (as strings: "1", "2", 
     const key = String(i + 1);
     if (rawAnswers[key]) {
       answers[field.entryId] = rawAnswers[key];
+    }
+  });
+
+  // Map "Other" free-text answers to their .other_option_response keys
+  otherSelectedFields.forEach((field, i) => {
+    const key = String(otherOffset + i + 1);
+    if (rawAnswers[key]) {
+      answers[`${field.entryId}.other_option_response`] = rawAnswers[key];
     }
   });
 

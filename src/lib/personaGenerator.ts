@@ -29,11 +29,13 @@ ${questionLabels}
 
 Generate exactly ${count} distinct personas who would realistically fill out this survey. Each persona should have a unique perspective and background.
 
+IMPORTANT: All personas are Nigerians. Use Nigerian full names (from any of the major ethnic groups: Yoruba, Igbo, Hausa-Fulani, Efik, Ijaw, Tiv, etc.). Occupations, educational qualifications, and backgrounds must reflect the Nigerian context — e.g. degrees are B.Sc, HND, OND, M.Sc, MBA, Ph.D (not Associate Degree or equivalents that don't exist in Nigeria's system). Reference Nigerian cities, universities, companies, and everyday experiences where relevant.
+
 Return a JSON array where each element has:
-- "name": string (realistic full name)
-- "age": number (between 18 and 75)
+- "name": string (realistic Nigerian full name)
+- "age": number (between 18 and 60)
 - "occupation": string
-- "background": string (1-2 sentences about their relevant background)
+- "background": string (1-2 sentences about their relevant background, grounded in Nigerian context)
 - "sentiment": one of "positive", "neutral", "critical", or "mixed"
 - "verbosity": one of "brief", "moderate", or "detailed"
 - "answerTendencies": string (1 sentence describing how they typically respond to surveys)
