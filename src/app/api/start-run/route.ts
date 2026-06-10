@@ -41,6 +41,16 @@ export async function POST(request: NextRequest) {
     // 1. Parse the form
     const schema: FormSchema = await parseGoogleForm(formUrl);
 
+    if (schema.requiresSignIn && !accessToken) {
+      return NextResponse.json(
+        {
+          error:
+            "This Google Form requires sign-in before submission. Surveyor can parse it, but Google will reject anonymous background submissions with HTTP 401.",
+        },
+        { status: 422 }
+      );
+    }
+
     // 2. Generate personas
     const personas: Persona[] = await generatePersonas(schema, numPersonas);
 

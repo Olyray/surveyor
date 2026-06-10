@@ -130,6 +130,13 @@ export default function Home() {
           {schema.description && (
             <p className="mb-4 text-sm text-gray-600">{schema.description}</p>
           )}
+          {schema.requiresSignIn && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              This form requires Google sign-in before submission. Surveyor can
+              parse the questions, but Google will reject anonymous background
+              submissions for this form.
+            </div>
+          )}
           <div className="mb-4 space-y-2">
             {schema.fields.map((field) => (
               <div
@@ -165,7 +172,7 @@ export default function Home() {
             </label>
             <button
               onClick={handleGeneratePersonas}
-              disabled={loading}
+              disabled={loading || schema.requiresSignIn}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               {loading && step === "schema"

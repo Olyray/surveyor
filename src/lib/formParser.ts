@@ -109,6 +109,16 @@ function parseFormHtml(html: string, formId: string): FormSchema {
 
   const fields: Field[] = [];
 
+  if (hasCollectedEmailField(data)) {
+    fields.push({
+      entryId: "emailAddress",
+      label: "Email",
+      type: "email",
+      required: true,
+      options: [],
+    });
+  }
+
   for (const rawField of rawFields) {
     const parsed = parseField(rawField);
     if (Array.isArray(parsed)) {
@@ -127,7 +137,29 @@ function parseFormHtml(html: string, formId: string): FormSchema {
     (f: any[]) => Array.isArray(f) && f[3] === 8
   ).length || 1;
 
-  return { formId: submissionFormId, title, description, fields, pageCount };
+  return {
+    formId: submissionFormId,
+    title,
+    description,
+    fields,
+    pageCount,
+    requiresSignIn: requiresSignInToContinue(html),
+  };
+}
+
+/**
+ * Google Forms stores the built-in "Collect email addresses" field in form
+ * settings instead of the regular question array. Submitted values use the
+ * special form key "emailAddress".
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hasCollectedEmailField(data: any[]): boolean {
+  const emailSettings = data[1]?.[10];
+  return Array.isArray(emailSettings) && emailSettings[0] === 1;
+}
+
+function requiresSignInToContinue(html: string): boolean {
+  return html.includes('data-sign-in-to-continue="true"');
 }
 
 /**

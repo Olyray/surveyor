@@ -25,7 +25,8 @@ export async function generateResponseForPersona(
 
   // Batch all free-text fields into a single LLM call
   const textFields = schema.fields.filter(
-    (f) => f.type === "short_text" || f.type === "long_text"
+    (f) =>
+      f.type === "email" || f.type === "short_text" || f.type === "long_text"
   );
 
   // Fields where "Other" was selected — need the LLM to write the free text
@@ -221,9 +222,12 @@ async function generateFreeTextAnswers(
 
   const questionList = textFields
     .map((f, i) => {
-      const hint = f.type === "short_text"
-        ? " [SHORT ANSWER: reply in a few words only, like a real survey respondent would — e.g. a name, a place, or a brief phrase. Never write a full sentence.]"
-        : " [OPEN-ENDED: write naturally in your own voice]";
+      const hint =
+        f.type === "email"
+          ? " [EMAIL: return one plausible personal email address only. Make it fit your persona's name, and use a common email provider such as gmail.com, yahoo.com, outlook.com, or icloud.com.]"
+          : f.type === "short_text"
+            ? " [SHORT ANSWER: reply in a few words only, like a real survey respondent would — e.g. a name, a place, or a brief phrase. Never write a full sentence.]"
+            : " [OPEN-ENDED: write naturally in your own voice]";
       return `${i + 1}. "${f.label}"${hint}`;
     })
     .join("\n");
@@ -263,7 +267,12 @@ Return a JSON object where keys are the question numbers (as strings: "1", "2", 
   textFields.forEach((field, i) => {
     const key = String(i + 1);
     if (rawAnswers[key]) {
-      answers[field.entryId] = rawAnswers[key];
+      answers[field.entryId] =
+        field.type === "email"
+          ? normaliseEmail(rawAnswers[key]) || buildDummyEmail(persona)
+          : rawAnswers[key];
+    } else if (field.type === "email") {
+      answers[field.entryId] = buildDummyEmail(persona);
     }
   });
 
@@ -276,6 +285,27 @@ Return a JSON object where keys are the question numbers (as strings: "1", "2", 
   });
 
   return answers;
+}
+
+function normaliseEmail(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
+    ? trimmed
+    : "";
+}
+
+function buildDummyEmail(persona: Persona): string {
+  const localPart =
+    persona.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ".")
+      .replace(/^\.+|\.+$/g, "") || "respondent";
+
+  const suffix = String(persona.age ?? Math.floor(18 + Math.random() * 43));
+  const domains = ["gmail.com", "yahoo.com", "outlook.com", "icloud.com"];
+  const domain = domains[Math.floor(Math.random() * domains.length)];
+
+  return `${localPart}${suffix}@${domain}`;
 }
 
 /**

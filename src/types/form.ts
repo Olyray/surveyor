@@ -1,4 +1,5 @@
 export type FieldType =
+  | "email"
   | "short_text"
   | "long_text"
   | "multiple_choice"
@@ -27,6 +28,7 @@ export type FormSchema = {
   description: string;
   fields: Field[];
   pageCount: number;
+  requiresSignIn?: boolean;
 };
 
 /**
