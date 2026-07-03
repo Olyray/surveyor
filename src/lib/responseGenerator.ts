@@ -6,20 +6,27 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
 
 type AnswerMap = Record<string, string>;
 
+type ResponseContext = {
+  uniqueEmail: string;
+};
+
 /**
  * Generate a complete set of answers for a single persona.
  */
 export async function generateResponseForPersona(
   schema: FormSchema,
-  persona: Persona
+  persona: Persona,
+  context: ResponseContext
 ): Promise<AnswerMap> {
   const answers: AnswerMap = {};
 
   // Handle structured fields first (multiple choice, checkbox, dropdown, linear scale)
+  const structuredFields: Field[] = [];
   for (const field of schema.fields) {
     const answer = generateStructuredAnswer(field, persona);
     if (answer !== null) {
       answers[field.entryId] = answer;
+      structuredFields.push(field);
     }
   }
 
@@ -34,14 +41,19 @@ export async function generateResponseForPersona(
     (f) => answers[f.entryId] === "__other_option__"
   );
 
-  if (textFields.length > 0 || otherSelectedFields.length > 0) {
-    const textAnswers = await generateFreeTextAnswers(
+  // Call LLM when there are text fields, "other" selections, or 2+ structured fields
+  // (consistency checking requires seeing multiple structured answers together)
+  if (textFields.length > 0 || otherSelectedFields.length > 0 || structuredFields.length > 1) {
+    const llmAnswers = await generateLLMAnswers(
       schema,
       textFields,
       persona,
-      otherSelectedFields
+      otherSelectedFields,
+      context,
+      structuredFields,
+      answers
     );
-    Object.assign(answers, textAnswers);
+    Object.assign(answers, llmAnswers);
   }
 
   return answers;
@@ -198,14 +210,17 @@ function generateRandomTime(): string {
 }
 
 /**
- * Generate free-text answers for all text fields in a single batched LLM call.
+ * Generate free-text answers and validate consistency of structured answers in one LLM call.
  * Also generates the free-text value for any "Other" option selections.
  */
-async function generateFreeTextAnswers(
+async function generateLLMAnswers(
   schema: FormSchema,
   textFields: Field[],
   persona: Persona,
-  otherSelectedFields: Field[] = []
+  otherSelectedFields: Field[],
+  context: ResponseContext,
+  structuredFields: Field[],
+  structuredAnswers: AnswerMap
 ): Promise<AnswerMap> {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-flash",
@@ -224,7 +239,7 @@ async function generateFreeTextAnswers(
     .map((f, i) => {
       const hint =
         f.type === "email"
-          ? " [EMAIL: return one plausible personal email address only. Make it fit your persona's name, and use a common email provider such as gmail.com, yahoo.com, outlook.com, or icloud.com.]"
+          ? ` [EMAIL: return exactly "${context.uniqueEmail}" and nothing else.]`
           : f.type === "short_text"
             ? " [SHORT ANSWER: reply in a few words only, like a real survey respondent would — e.g. a name, a place, or a brief phrase. Never write a full sentence.]"
             : " [OPEN-ENDED: write naturally in your own voice]";
@@ -242,6 +257,20 @@ async function generateFreeTextAnswers(
 
   const allQuestions = [questionList, otherList].filter(Boolean).join("\n");
 
+  // Build a summary of pre-selected structured answers for consistency checking
+  const consistencySection = structuredFields.length > 1
+    ? `\nThe following answers have been pre-selected for the structured questions. Check ALL of them together for logical consistency (e.g. if someone has used smartphones for less than 1 year they cannot have used 3+ brands over the past 5 years; a student is unlikely to be 46+; income should match occupation). Where answers contradict each other, correct the MINIMUM number needed to make the set coherent. Return corrections in a "corrections" key mapping the entry ID to the corrected option (must be one of the listed options exactly as written).
+
+Pre-selected structured answers:
+${structuredFields.map(f => {
+  const selected = structuredAnswers[f.entryId];
+  const displaySelected = selected === "__other_option__" ? "Other" : selected;
+  const opts = f.options.length > 0 ? ` [options: ${f.options.map(o => `"${o}"`).join(", ")}]` : "";
+  return `- entryId "${f.entryId}" | "${f.label}": "${displaySelected}"${opts}`;
+}).join("\n")}
+`
+    : "";
+
   const prompt = `You are ${persona.name}, age ${persona.age}, ${persona.occupation}. ${persona.background}
 Your survey response style: ${persona.answerTendencies}. You tend to be ${persona.sentiment} in your outlook.
 ${verbosityGuide[persona.verbosity]}
@@ -249,81 +278,78 @@ ${verbosityGuide[persona.verbosity]}
 You are Nigerian. All your answers must reflect the Nigerian context — use Nigerian spellings, references, places, institutions, and cultural norms. Do not reference things that don't exist or are uncommon in Nigeria (e.g. no Associate Degrees, no US/UK-specific institutions or brands unless they also operate in Nigeria).
 
 This is a survey titled "${schema.title}".
-
-Answer each survey question EXACTLY as instructed per question. Short-answer questions must be answered in a few words — never a full sentence. Open-ended questions can be answered naturally.
+${consistencySection}
+${allQuestions ? `Answer each survey question EXACTLY as instructed per question. Short-answer questions must be answered in a few words — never a full sentence. Open-ended questions can be answered naturally.
+For email questions, use exactly this unique email for this survey entry: ${context.uniqueEmail}
 
 Questions:
 ${allQuestions}
 
-Return a JSON object where keys are the question numbers (as strings: "1", "2", etc.) and values are your answers.`;
+` : ""}Return a JSON object where:
+- Keys "1", "2", etc. are your answers to the numbered questions above (omit if there are no numbered questions).
+- Key "corrections" (optional) maps entry IDs to corrected option strings for any inconsistent pre-selected answers.
+Example: { "1": "Lagos", "corrections": { "entry.123": "One" } }`;
 
   const result = await model.generateContent(prompt);
   const text = result.response.text();
 
-  const rawAnswers: Record<string, string> = JSON.parse(text);
+  const rawAnswers: Record<string, string | Record<string, string>> = JSON.parse(text);
 
-  // Map numbered answers back to entry IDs
   const answers: AnswerMap = {};
+
+  // Map numbered text answers back to entry IDs
   textFields.forEach((field, i) => {
     const key = String(i + 1);
-    if (rawAnswers[key]) {
-      answers[field.entryId] =
-        field.type === "email"
-          ? normaliseEmail(rawAnswers[key]) || buildDummyEmail(persona)
-          : rawAnswers[key];
+    const value = rawAnswers[key];
+    if (typeof value === "string" && value) {
+      answers[field.entryId] = field.type === "email" ? context.uniqueEmail : value;
     } else if (field.type === "email") {
-      answers[field.entryId] = buildDummyEmail(persona);
+      answers[field.entryId] = context.uniqueEmail;
     }
   });
 
   // Map "Other" free-text answers to their .other_option_response keys
   otherSelectedFields.forEach((field, i) => {
     const key = String(otherOffset + i + 1);
-    if (rawAnswers[key]) {
-      answers[`${field.entryId}.other_option_response`] = rawAnswers[key];
+    const value = rawAnswers[key];
+    if (typeof value === "string" && value) {
+      answers[`${field.entryId}.other_option_response`] = value;
     }
   });
+
+  // Apply consistency corrections for structured fields
+  const corrections = rawAnswers["corrections"];
+  if (corrections && typeof corrections === "object" && !Array.isArray(corrections)) {
+    for (const [entryId, correctedValue] of Object.entries(corrections)) {
+      if (typeof correctedValue === "string" && correctedValue) {
+        answers[entryId] = correctedValue;
+      }
+    }
+  }
 
   return answers;
 }
 
-function normaliseEmail(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)
-    ? trimmed
-    : "";
-}
-
-function buildDummyEmail(persona: Persona): string {
-  const localPart =
-    persona.name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ".")
-      .replace(/^\.+|\.+$/g, "") || "respondent";
-
-  const suffix = String(persona.age ?? Math.floor(18 + Math.random() * 43));
-  const domains = ["gmail.com", "yahoo.com", "outlook.com", "icloud.com"];
-  const domain = domains[Math.floor(Math.random() * domains.length)];
-
-  return `${localPart}${suffix}@${domain}`;
-}
+const EMAIL_DOMAINS = ["gmail.com", "yahoo.com", "outlook.com", "icloud.com"];
+const EMAIL_WORDS = [
+  "ade", "tola", "nkem", "zainab", "kemi", "uche", "musa", "lola", "dayo",
+  "ife", "lagos", "abuja", "portharcourt", "ibadan", "studio", "works",
+  "market", "career", "daily", "connect",
+];
 
 /**
- * Generate all responses for a run: N responses cycling through personas.
+ * Build a unique email for a specific job using the jobId suffix as a
+ * uniqueness guarantee — safe to call independently per Inngest invocation.
  */
-export async function generateAllResponses(
-  schema: FormSchema,
-  personas: Persona[],
-  totalResponses: number
-): Promise<{ personaIndex: number; answers: AnswerMap }[]> {
-  const responses: { personaIndex: number; answers: AnswerMap }[] = [];
-
-  for (let i = 0; i < totalResponses; i++) {
-    const personaIndex = i % personas.length;
-    const persona = personas[personaIndex];
-    const answers = await generateResponseForPersona(schema, persona);
-    responses.push({ personaIndex, answers });
-  }
-
-  return responses;
+export function buildEmailForJob(persona: Persona, jobId: string): string {
+  const nameParts = persona.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const firstName = nameParts[0] ?? randomItem(EMAIL_WORDS);
+  const suffix = jobId.slice(-6);
+  const domain = randomItem(EMAIL_DOMAINS);
+  return `${firstName}${suffix}@${domain}`;
 }
+
+function randomItem<T>(items: T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+

@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { inngest } from "@/inngest/client";
 import { parseGoogleForm } from "@/lib/formParser";
 import { generatePersonas } from "@/lib/personaGenerator";
-import { generateAllResponses } from "@/lib/responseGenerator";
 import type { Persona } from "@/types/persona";
 import type { FormSchema } from "@/types/form";
 
@@ -54,10 +53,7 @@ export async function POST(request: NextRequest) {
     // 2. Generate personas
     const personas: Persona[] = await generatePersonas(schema, numPersonas);
 
-    // 3. Generate all response payloads
-    const responses = await generateAllResponses(schema, personas, count);
-
-    // 4. Create the run in DB
+    // 3. Create the run in DB
     const run = await prisma.submissionRun.create({
       data: {
         formUrl,
@@ -71,46 +67,42 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // 5. Calculate scheduled times with jitter
+    // 4. Calculate scheduled times with jitter and create job records.
+    //    Answers are generated lazily inside the Inngest function so this
+    //    request returns in seconds rather than minutes.
     const now = Date.now();
     const totalWindowMs = window * 60 * 1000;
     const baseInterval = totalWindowMs / count;
 
-    const jobs = responses.map((response, i) => {
+    const jobs = Array.from({ length: count }, (_, i) => {
+      const personaIndex = i % personas.length;
       const jitter = (Math.random() - 0.5) * baseInterval * 0.6;
       const scheduledFor = new Date(now + i * baseInterval + jitter);
       return {
         runId: run.id,
-        personaIndex: response.personaIndex,
-        answers: response.answers as unknown as Prisma.InputJsonValue,
+        personaIndex,
+        answers: {} as unknown as Prisma.InputJsonValue,
         scheduledFor,
         status: "pending",
       };
     });
 
-    // 6. Persist all jobs
     await prisma.responseJob.createMany({ data: jobs });
 
-    // 7. Retrieve created jobs (need IDs for Inngest events)
+    // 5. Retrieve created jobs (need IDs for Inngest events)
     const createdJobs = await prisma.responseJob.findMany({
       where: { runId: run.id },
       orderBy: { scheduledFor: "asc" },
     });
 
-    // 8. Send Inngest events for each job
+    // 6. Send one Inngest event per job — the function will generate the
+    //    response payload and submit it at the scheduled time.
     const events = createdJobs.map((job) => ({
       name: "surveyor/submit.response" as const,
-      data: {
-        jobId: job.id,
-        formId: schema.formId,
-        answers: job.answers as Record<string, string>,
-        accessToken,
-        pageCount: schema.pageCount,
-      },
+      data: { jobId: job.id },
       ts: job.scheduledFor.getTime(),
     }));
 
-    // Inngest supports sending events in batches
     await inngest.send(events);
 
     return NextResponse.json({
